@@ -18,20 +18,9 @@ const (
 	DefaultClientSecret  = "dbw2OtmVEeuUvIptb1Coyg"
 	DefaultUserAgent     = "ANDROID-com.pikcloud.pikpak/1.53.2"
 	DefaultConfigDir     = "~/.config/pikpakdriver"
-	DefaultConfigFile    = "config.toml"
 	DefaultSessionFile   = "session.json"
 )
 
-// ── Config ────────────────────────────────────────────────────────────────
-
-type Config struct {
-	Email        string `toml:"email,omitempty" json:"email,omitempty"`
-	Password     string `toml:"password,omitempty" json:"-"`
-	AccessToken  string `toml:"access_token,omitempty" json:"access_token,omitempty"`
-	RefreshToken string `toml:"refresh_token,omitempty" json:"refresh_token,omitempty"`
-}
-
-func ConfigPath() string  { return filepath.Join(expandPath(DefaultConfigDir), DefaultConfigFile) }
 func SessionPath() string { return filepath.Join(expandPath(DefaultConfigDir), DefaultSessionFile) }
 func ConfigDir() string   { return expandPath(DefaultConfigDir) }
 

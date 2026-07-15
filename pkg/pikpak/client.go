@@ -151,7 +151,9 @@ func (c *Client) initCaptcha(email string) (*CaptchaInitResponse, error) {
 		return nil, err
 	}
 	var captcha CaptchaInitResponse
-	json.Unmarshal(raw, &captcha)
+	if err := json.Unmarshal(raw, &captcha); err != nil {
+		return nil, fmt.Errorf("parse captcha init response: %w", err)
+	}
 	return &captcha, nil
 }
 
@@ -225,34 +227,45 @@ func (c *Client) AccessToken() (string, error) {
 
 // ── HTTP Infrastructure ───────────────────────────────────────────────────
 
-func (c *Client) rawPOST(baseURL, path string, body interface{}) ([]byte, error) {
-	data, _ := json.Marshal(body)
-	req, err := http.NewRequest("POST", baseURL+path, bytes.NewReader(data))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", DefaultUserAgent)
-	if c.deviceID != "" {
-		req.Header.Set("X-Device-Id", c.deviceID)
-	}
+// httpResponse holds the raw body and status code from an HTTP response.
+type httpResponse struct {
+	body   []byte
+	status int
+}
+
+// executeRequest performs an HTTP request and returns the response body
+// along with the status code. Network-level errors are returned immediately;
+// HTTP-level errors (4xx/5xx) are NOT treated as errors — the caller inspects
+// status to decide how to react (e.g. 401 → retry with refreshed token).
+func (c *Client) executeRequest(req *http.Request) (*httpResponse, error) {
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(raw))
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
 	}
-	return raw, nil
+	return &httpResponse{body: raw, status: resp.StatusCode}, nil
 }
 
-func (c *Client) doRequest(method, baseURL, path string, query map[string]string, body []byte) ([]byte, error) {
-	token, err := c.AccessToken()
-	if err != nil {
-		return nil, err
+// setRequestHeaders sets common HTTP headers on a request.
+// If token is non-empty, Authorization is set.
+func (c *Client) setRequestHeaders(req *http.Request, token string) {
+	req.Header.Set("User-Agent", DefaultUserAgent)
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
+	if c.deviceID != "" {
+		req.Header.Set("X-Device-Id", c.deviceID)
+	}
+}
+
+// buildDriveURL constructs a full URL from the drive base URL,
+// the given path, and optional query parameters.
+func buildURL(baseURL, path string, query map[string]string) string {
 	fullURL := baseURL + path
 	if len(query) > 0 {
 		vals := url.Values{}
@@ -261,45 +274,67 @@ func (c *Client) doRequest(method, baseURL, path string, query map[string]string
 		}
 		fullURL += "?" + vals.Encode()
 	}
-	req, err := http.NewRequest(method, fullURL, bytes.NewReader(body))
+	return fullURL
+}
+
+// rawPOST sends an unauthenticated POST request (used for auth endpoints:
+// sign-in, captcha, token refresh). Returns the raw response body only
+// on success; 4xx/5xx responses are treated as errors.
+func (c *Client) rawPOST(baseURL, path string, body interface{}) ([]byte, error) {
+	data, _ := json.Marshal(body)
+	req, err := http.NewRequest("POST", baseURL+path, bytes.NewReader(data))
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("User-Agent", DefaultUserAgent)
-	req.Header.Set("Content-Type", "application/json")
-	if c.deviceID != "" {
-		req.Header.Set("X-Device-Id", c.deviceID)
-	}
-	resp, err := c.httpClient.Do(req)
+	c.setRequestHeaders(req, "")
+	resp, err := c.executeRequest(req)
 	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
+		return nil, err
 	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
+	if resp.status >= 400 {
+		return nil, fmt.Errorf("HTTP %d: %s", resp.status, string(resp.body))
+	}
+	return resp.body, nil
+}
 
-	// 401 → auto refresh token once
-	if resp.StatusCode == 401 {
+// doRequest sends an authenticated HTTP request. It automatically attaches
+// the Bearer token and retries once on 401 (after refreshing the token).
+// The caller provides the serialized body; nil body = no body.
+func (c *Client) doRequest(method, baseURL, path string, query map[string]string, body []byte) ([]byte, error) {
+	token, err := c.AccessToken()
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.doRequestWithToken(method, baseURL, path, query, body, token)
+	if err != nil {
+		return nil, err
+	}
+	// 401 → token may be stale, refresh and retry once
+	if resp.status == 401 {
 		if err := c.refreshToken(); err != nil {
 			return nil, fmt.Errorf("auth failed: %w", err)
 		}
-		token, _ = c.AccessToken()
-		req.Header.Set("Authorization", "Bearer "+token)
-		resp2, err := c.httpClient.Do(req)
+		newToken, _ := c.AccessToken()
+		resp, err = c.doRequestWithToken(method, baseURL, path, query, body, newToken)
 		if err != nil {
-			return nil, fmt.Errorf("retry failed: %w", err)
+			return nil, err
 		}
-		defer resp2.Body.Close()
-		raw, _ = io.ReadAll(resp2.Body)
-		if resp2.StatusCode >= 400 {
-			return nil, fmt.Errorf("API error (HTTP %d): %s", resp2.StatusCode, string(raw))
-		}
-		return raw, nil
 	}
-	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("API error (HTTP %d): %s", resp.StatusCode, string(raw))
+	if resp.status >= 400 {
+		return nil, fmt.Errorf("API error (HTTP %d): %s", resp.status, string(resp.body))
 	}
-	return raw, nil
+	return resp.body, nil
+}
+
+// doRequestWithToken is the inner loop of doRequest — builds and executes
+// a single request with the given token. Does NOT retry on 401.
+func (c *Client) doRequestWithToken(method, baseURL, path string, query map[string]string, body []byte, token string) (*httpResponse, error) {
+	req, err := http.NewRequest(method, buildURL(baseURL, path, query), bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	c.setRequestHeaders(req, token)
+	return c.executeRequest(req)
 }
 
 func (c *Client) driveGET(path string, query map[string]string) ([]byte, error) {
@@ -324,6 +359,15 @@ func (c *Client) authGET(path string) ([]byte, error) {
 	return c.doRequest("GET", c.authBaseURL, path, nil, nil)
 }
 
+// un marshalJSON is a helper that unmarshals raw bytes into the given target.
+// It returns a wrapped error when the response cannot be parsed.
+func unmarshalJSON(raw []byte, v interface{}) error {
+	if err := json.Unmarshal(raw, v); err != nil {
+		return fmt.Errorf("parse response: %w", err)
+	}
+	return nil
+}
+
 // ── Account API ───────────────────────────────────────────────────────────
 
 func (c *Client) GetUserInfo() (*UserInfo, error) {
@@ -332,7 +376,9 @@ func (c *Client) GetUserInfo() (*UserInfo, error) {
 		return nil, err
 	}
 	var u UserInfo
-	json.Unmarshal(raw, &u)
+	if err := unmarshalJSON(raw, &u); err != nil {
+		return nil, err
+	}
 	return &u, nil
 }
 
@@ -342,7 +388,9 @@ func (c *Client) GetQuota() (*QuotaInfo, error) {
 		return nil, err
 	}
 	var q QuotaInfo
-	json.Unmarshal(raw, &q)
+	if err := unmarshalJSON(raw, &q); err != nil {
+		return nil, err
+	}
 	return &q, nil
 }
 
@@ -352,7 +400,9 @@ func (c *Client) GetVipInfo() (*VipInfoResponse, error) {
 		return nil, err
 	}
 	var v VipInfoResponse
-	json.Unmarshal(raw, &v)
+	if err := unmarshalJSON(raw, &v); err != nil {
+		return nil, err
+	}
 	return &v, nil
 }
 
@@ -362,7 +412,9 @@ func (c *Client) GetTransferQuota() (*TransferQuotaResponse, error) {
 		return nil, err
 	}
 	var t TransferQuotaResponse
-	json.Unmarshal(raw, &t)
+	if err := unmarshalJSON(raw, &t); err != nil {
+		return nil, err
+	}
 	return &t, nil
 }
 
@@ -382,7 +434,9 @@ func (c *Client) ListFiles(parentID string, limit int) (*DriveListResponse, erro
 		return nil, err
 	}
 	var list DriveListResponse
-	json.Unmarshal(raw, &list)
+	if err := unmarshalJSON(raw, &list); err != nil {
+		return nil, err
+	}
 	return &list, nil
 }
 
@@ -392,7 +446,9 @@ func (c *Client) GetFileInfo(fileID string) (*FileInfoResponse, error) {
 		return nil, err
 	}
 	var info FileInfoResponse
-	json.Unmarshal(raw, &info)
+	if err := unmarshalJSON(raw, &info); err != nil {
+		return nil, err
+	}
 	return &info, nil
 }
 
@@ -407,7 +463,9 @@ func (c *Client) Mkdir(parentID, name string) (*DriveFile, error) {
 		return nil, err
 	}
 	var resp CreateFolderResponse
-	json.Unmarshal(raw, &resp)
+	if err := unmarshalJSON(raw, &resp); err != nil {
+		return nil, err
+	}
 	return &resp.File, nil
 }
 
@@ -460,7 +518,7 @@ func (c *Client) EmptyTrash() error {
 
 func (c *Client) ListTrash(limit int) (*TrashListResponse, error) {
 	q := map[string]string{
-		"limit":  fmt.Sprintf("%d", limit),
+		"limit":   fmt.Sprintf("%d", limit),
 		"filters": `{"trashed":{"eq":true}}`,
 	}
 	raw, err := c.driveGET("/drive/v1/files", q)
@@ -468,7 +526,9 @@ func (c *Client) ListTrash(limit int) (*TrashListResponse, error) {
 		return nil, err
 	}
 	var list TrashListResponse
-	json.Unmarshal(raw, &list)
+	if err := unmarshalJSON(raw, &list); err != nil {
+		return nil, err
+	}
 	return &list, nil
 }
 
@@ -498,20 +558,23 @@ func (c *Client) ListStarred(limit int) (*DriveListResponse, error) {
 		return nil, err
 	}
 	var list DriveListResponse
-	json.Unmarshal(raw, &list)
+	if err := unmarshalJSON(raw, &list); err != nil {
+		return nil, err
+	}
 	return &list, nil
 }
 
-// ── Trash API ─────────────────────────────────────────────────────────────
+// ── Download API ──────────────────────────────────────────────────────────
 
 func (c *Client) GetDownloadLink(fileID string) (*DownloadResponse, error) {
 	raw, err := c.driveGET("/drive/v1/files/"+fileID, nil)
 	if err != nil {
 		return nil, err
 	}
-	// Parse minimally — response has web_content_link
 	var resp DownloadResponse
-	json.Unmarshal(raw, &resp)
+	if err := unmarshalJSON(raw, &resp); err != nil {
+		return nil, err
+	}
 	return &resp, nil
 }
 
@@ -537,7 +600,9 @@ func (c *Client) AddOfflineTask(magnetURL, parentID, name string) (*OfflineTaskR
 		return nil, err
 	}
 	var resp OfflineTaskResponse
-	json.Unmarshal(raw, &resp)
+	if err := unmarshalJSON(raw, &resp); err != nil {
+		return nil, err
+	}
 	return &resp, nil
 }
 
@@ -557,7 +622,9 @@ func (c *Client) ListOfflineTasks(limit int, phases []string) (*OfflineListRespo
 		return nil, err
 	}
 	var list OfflineListResponse
-	json.Unmarshal(raw, &list)
+	if err := unmarshalJSON(raw, &list); err != nil {
+		return nil, err
+	}
 	return &list, nil
 }
 
@@ -570,11 +637,20 @@ func (c *Client) GetOfflineTask(taskID string) (*OfflineTask, error) {
 	var resp struct {
 		Task OfflineTask `json:"task"`
 	}
-	json.Unmarshal(raw, &resp)
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		// If wrapped parse failed, try direct
+		var task OfflineTask
+		if err2 := json.Unmarshal(raw, &task); err2 != nil {
+			return nil, fmt.Errorf("parse offline task response: %v (wrapped: %w)", err2, err)
+		}
+		return &task, nil
+	}
 	if resp.Task.ID == "" {
 		var task OfflineTask
-		json.Unmarshal(raw, &task)
-		resp.Task = task
+		if err := json.Unmarshal(raw, &task); err != nil {
+			return nil, fmt.Errorf("parse offline task response: %w", err)
+		}
+		return &task, nil
 	}
 	return &resp.Task, nil
 }
@@ -609,7 +685,9 @@ func (c *Client) ListEvents(limit int) (*EventsResponse, error) {
 		return nil, err
 	}
 	var resp EventsResponse
-	json.Unmarshal(raw, &resp)
+	if err := unmarshalJSON(raw, &resp); err != nil {
+		return nil, err
+	}
 	return &resp, nil
 }
 
@@ -625,7 +703,9 @@ func (c *Client) GetShareInfo(shareID, passCode string) (*ShareInfoResponse, err
 		return nil, err
 	}
 	var resp ShareInfoResponse
-	json.Unmarshal(raw, &resp)
+	if err := unmarshalJSON(raw, &resp); err != nil {
+		return nil, err
+	}
 	return &resp, nil
 }
 
@@ -663,7 +743,9 @@ func (c *Client) CreateShare(fileIDs []string, expireDays int, passCode string) 
 		return nil, err
 	}
 	var resp CreateShareResponse
-	json.Unmarshal(raw, &resp)
+	if err := unmarshalJSON(raw, &resp); err != nil {
+		return nil, err
+	}
 	return &resp, nil
 }
 
@@ -679,7 +761,9 @@ func (c *Client) ShareDetail(shareID, passCodeToken, dirID string) (*ShareDetail
 		return nil, err
 	}
 	var resp ShareDetailResponse
-	json.Unmarshal(raw, &resp)
+	if err := unmarshalJSON(raw, &resp); err != nil {
+		return nil, err
+	}
 	return &resp, nil
 }
 
@@ -689,7 +773,9 @@ func (c *Client) ListShares() (*ShareListResponse, error) {
 		return nil, err
 	}
 	var resp ShareListResponse
-	json.Unmarshal(raw, &resp)
+	if err := unmarshalJSON(raw, &resp); err != nil {
+		return nil, err
+	}
 	return &resp, nil
 }
 

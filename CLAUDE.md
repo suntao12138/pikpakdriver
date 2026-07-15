@@ -36,7 +36,7 @@ mcp/main.go                  # MCP server entry (also has --email/--password log
 │   └── tools/               # 28 MCP tools (Account, File, Offline, Share, Events)
 cli/main.go                  # CLI entry (uses Cobra)
 ├── cli/cmd/                 # 19 subcommands organized by feature area
-│   └── internal/auth/       # Credential loading with viper
+│   (no internal packages)
 pkg/pikpak/
 ├── client.go                # HTTP client: auth flow, token refresh, all API methods
 ├── models.go                # Data models + credential/session file I/O

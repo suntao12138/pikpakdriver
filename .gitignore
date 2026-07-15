@@ -11,6 +11,10 @@ bin/
 .idea/
 *.swp
 
+# Codegraph / AI
+.codegraph/
+.claude/
+
 # OS
 .DS_Store
 Thumbs.db
