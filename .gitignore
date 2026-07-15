@@ -1,0 +1,16 @@
+# Binaries
+pikpakdriver
+pikpakdriver-mcp
+
+# Build output
+build/
+bin/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
