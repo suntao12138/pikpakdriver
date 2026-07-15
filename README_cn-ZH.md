@@ -33,7 +33,7 @@
 # 从源码编译：
 git clone https://github.com/suntao12138/pikpakdriver.git
 cd pikpakdriver
-go build -o pikpakdriver-mcp .           # MCP 服务端
+go build -o pikpakdriver-mcp ./mcp/      # MCP 服务端
 go build -o pikpakdriver ./cli/          # CLI 客户端
 ```
 
@@ -183,7 +183,7 @@ mcp_servers:
 
 ```
 pikpakdriver/
-├── main.go                    # MCP 服务端入口
+├── mcp/main.go                # MCP 服务端入口
 ├── cli/
 │   ├── main.go                # CLI 入口
 │   ├── cmd/                   # 19 个子命令（cobra）
@@ -209,7 +209,7 @@ go 1.23+
 
 # 完整编译
 cd ~/Tools_Pro/pikpakdriver
-go build -o pikpakdriver-mcp .
+go build -o pikpakdriver-mcp ./mcp/
 go build -o pikpakdriver ./cli/
 
 # 运行测试

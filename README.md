@@ -33,7 +33,7 @@
 # Or build from source:
 git clone https://github.com/suntao12138/pikpakdriver.git
 cd pikpakdriver
-go build -o pikpakdriver-mcp .           # MCP Server
+go build -o pikpakdriver-mcp ./mcp/      # MCP Server
 go build -o pikpakdriver ./cli/          # CLI Client
 ```
 
@@ -183,7 +183,7 @@ All configuration files are stored at `~/.config/pikpakdriver/`:
 
 ```
 pikpakdriver/
-├── main.go                    # MCP Server entry point
+├── mcp/main.go                # MCP Server entry point
 ├── cli/
 │   ├── main.go                # CLI entry point
 │   ├── cmd/                   # 19 subcommands (cobra)
@@ -209,7 +209,7 @@ go 1.23+
 
 # Full build
 cd ~/Tools_Pro/pikpakdriver
-go build -o pikpakdriver-mcp .
+go build -o pikpakdriver-mcp ./mcp/
 go build -o pikpakdriver ./cli/
 
 # Run tests
