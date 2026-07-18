@@ -22,29 +22,6 @@ func jsonResult(v interface{}) *mcp.CallToolResult {
 	return successResult(string(b))
 }
 
-// ── Account Tools ──────────────────────────────────────────────────────────
-
-type AccountTools struct{ client *pikpak.Client }
-
-func NewAccountTools(client *pikpak.Client) *AccountTools { return &AccountTools{client: client} }
-
-type emptyArgs struct{}
-
-func (at *AccountTools) RegisterTools(server *mcp.Server) {
-	mcp.AddTool(server, &mcp.Tool{
-		Name: "getAccountInfo",
-		Description: "Get PikPak account info including user profile, storage quota, transfer quota, and VIP status",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, args emptyArgs) (*mcp.CallToolResult, any, error) {
-		user, _ := at.client.GetUserInfo()
-		quota, _ := at.client.GetQuota()
-		transfer, _ := at.client.GetTransferQuota()
-		vip, _ := at.client.GetVipInfo()
-		return jsonResult(map[string]interface{}{
-			"user": user, "quota": quota, "transfer": transfer, "vip": vip,
-		}), nil, nil
-	})
-}
-
 // ── File Tools ─────────────────────────────────────────────────────────────
 
 type FileTools struct{ client *pikpak.Client }
