@@ -41,12 +41,16 @@ go build -o pikpakdriver ./cli/          # CLI Client
 
 > ⚠️ PikPak blocks mainland China IPs. Use `--proxy` if needed.
 
-```bash
-# Login with proxy (recommended for China users)
-./pikpakdriver login --email your@email.com --password yourpass --proxy http://127.0.0.1:7890
+Either method works — pick one:
 
-# Verify
-./pikpakdriver --proxy http://127.0.0.1:7890 whoami
+**Option A: CLI Client**
+```bash
+./pikpakdriver login --email your@email.com --password yourpass --proxy http://127.0.0.1:7890
+```
+
+**Option B: MCP Server** (also supports one-shot login)
+```bash
+./pikpakdriver-mcp --email your@email.com --password yourpass --proxy http://127.0.0.1:7890
 ```
 
 Credentials and session are saved to `~/.config/pikpakdriver/`. Subsequent runs do not require re-login.
@@ -137,7 +141,26 @@ pikpakdriver version            # Version info
 
 ## MCP Server
 
-The MCP server provides 28 tools for AI agent integration. When configured in Hermes Agent:
+The MCP server supports two modes:
+
+### Mode 1: First-time Login
+
+```bash
+./pikpakdriver-mcp --email your@email.com --password yourpass --proxy http://127.0.0.1:7890
+```
+
+Credentials are saved to `~/.config/pikpakdriver/` and the program exits. Subsequent runs can start the server directly.
+
+> ⚠️ If CAPTCHA verification is triggered, the command will print a verification URL — open it in a browser to complete the challenge, then retry.
+
+### Mode 2: Start MCP Server
+
+```bash
+./pikpakdriver-mcp                                  # Uses proxy from config.json if set
+./pikpakdriver-mcp --proxy http://127.0.0.1:7890    # Override proxy
+```
+
+Auto-logs in from saved credentials and starts a stdio-based MCP server with 28 tools. Configure it in Claude Desktop / Hermes Agent / any MCP client:
 
 ```yaml
 # ~/.hermes/config.yaml
@@ -156,7 +179,7 @@ mcp_servers:
 | **Files** | `listFiles` `getFileInfo` `getDownloadLink` `mkdir` `rename` `moveFiles` `copyFiles` `starFiles` `unstarFiles` `listStarred` |
 | **Trash** | `trashFiles` `untrashFiles` `listTrash` `emptyTrash` `deleteFiles` |
 | **Offline** | `addOfflineTask` `listOfflineTasks` `getOfflineTask` `deleteOfflineTask` `retryOfflineTask` |
-| **Share** | `createShare` `listShares` `deleteShares` `saveShare` `getShareInfo` `shareDetail` |
+| **Share** | `createShare` `getShareInfo` `saveShare` `shareDetail` `listShares` `deleteShares` |
 | **Events** | `listEvents` |
 
 ---
@@ -183,14 +206,20 @@ All configuration files are stored at `~/.config/pikpakdriver/`:
 
 ```
 pikpakdriver/
-├── mcp/main.go                # MCP Server entry point
+├── mcp/
+│   ├── main.go                # Entry point (login mode + MCP server mode)
+│   └── server/
+│       ├── server.go          # MCP registration
+│       └── tools/             # 28 MCP tools (one file per group)
+│           ├── account.go
+│           ├── events.go
+│           ├── files.go
+│           ├── offline.go
+│           └── share.go
 ├── cli/
 │   ├── main.go                # CLI entry point
 │   ├── cmd/                   # 19 subcommands (cobra)
 │   └── internal/auth/         # Credential loading
-├── mcp/server/
-│   ├── server.go              # MCP registration
-│   └── tools/                 # 28 MCP tool implementations
 ├── pkg/pikpak/
 │   ├── models.go              # Data models (shared)
 │   └── client.go              # HTTP client (shared)

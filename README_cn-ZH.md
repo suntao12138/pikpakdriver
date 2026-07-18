@@ -41,12 +41,16 @@ go build -o pikpakdriver ./cli/          # CLI 客户端
 
 > ⚠️ PikPak 屏蔽中国大陆 IP，需要使用代理。
 
-```bash
-# 登录（带代理）
-./pikpakdriver login --email your@email.com --password yourpass --proxy http://127.0.0.1:7890
+两种方式均可完成登录，任选其一：
 
-# 验证
-./pikpakdriver --proxy http://127.0.0.1:7890 whoami
+**方式一：CLI 客户端**
+```bash
+./pikpakdriver login --email your@email.com --password yourpass --proxy http://127.0.0.1:7890
+```
+
+**方式二：MCP 服务端**（同样支持一键登录）
+```bash
+./pikpakdriver-mcp --email your@email.com --password yourpass --proxy http://127.0.0.1:7890
 ```
 
 凭证和 session 保存在 `~/.config/pikpakdriver/`，后续使用无需重新登录。
@@ -137,7 +141,26 @@ pikpakdriver version            # 版本信息
 
 ## MCP 服务端
 
-MCP 服务端提供 28 个工具，供 AI 智能体集成。配置到 Hermes Agent：
+MCP 服务端支持两种运行模式：
+
+### 模式一：首次登录
+
+```bash
+./pikpakdriver-mcp --email your@email.com --password yourpass --proxy http://127.0.0.1:7890
+```
+
+登录成功后凭证自动保存到 `~/.config/pikpakdriver/`，程序退出。后续可直接启动服务端。
+
+> ⚠️ 如果遇到 CAPTCHA 验证，命令行会返回验证 URL，请在浏览器中打开完成验证后重试。
+
+### 模式二：启动 MCP 服务
+
+```bash
+./pikpakdriver-mcp                                  # 使用 config.json 中的代理（如有）
+./pikpakdriver-mcp --proxy http://127.0.0.1:7890    # 覆盖代理配置
+```
+
+从已保存的凭证自动登录，启动 stdio-based MCP 服务，提供 28 个工具供 AI 智能体集成。例如配置到 Claude Desktop / Hermes Agent：
 
 ```yaml
 # ~/.hermes/config.yaml
@@ -156,7 +179,7 @@ mcp_servers:
 | **文件** | `listFiles` `getFileInfo` `getDownloadLink` `mkdir` `rename` `moveFiles` `copyFiles` `starFiles` `unstarFiles` `listStarred` |
 | **回收站** | `trashFiles` `untrashFiles` `listTrash` `emptyTrash` `deleteFiles` |
 | **离线** | `addOfflineTask` `listOfflineTasks` `getOfflineTask` `deleteOfflineTask` `retryOfflineTask` |
-| **分享** | `createShare` `listShares` `deleteShares` `saveShare` `getShareInfo` `shareDetail` |
+| **分享** | `createShare` `getShareInfo` `saveShare` `shareDetail` `listShares` `deleteShares` |
 | **事件** | `listEvents` |
 
 ---
@@ -183,14 +206,20 @@ mcp_servers:
 
 ```
 pikpakdriver/
-├── mcp/main.go                # MCP 服务端入口
+├── mcp/
+│   ├── main.go                # 入口（登录模式 + MCP 服务模式）
+│   └── server/
+│       ├── server.go          # MCP 注册
+│       └── tools/             # 28 个 MCP 工具（按组拆分）
+│           ├── account.go
+│           ├── events.go
+│           ├── files.go
+│           ├── offline.go
+│           └── share.go
 ├── cli/
 │   ├── main.go                # CLI 入口
 │   ├── cmd/                   # 19 个子命令（cobra）
 │   └── internal/auth/         # 凭证读取
-├── mcp/server/
-│   ├── server.go              # MCP 注册
-│   └── tools/                 # 28 个 MCP 工具实现
 ├── pkg/pikpak/
 │   ├── models.go              # 数据模型（共享）
 │   └── client.go              # HTTP 客户端（共享）
